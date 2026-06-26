@@ -237,6 +237,27 @@ def _build_dividend_payload(
     }
 
 
+def _pivot_transposed_financial(df: pd.DataFrame) -> Optional[pd.Series]:
+    """
+    Handle stock_financial_abstract which returns a transposed DataFrame:
+      rows = financial indicators, cols = report dates (YYYYMMDD, newest first).
+    Pivots into a Series keyed by indicator name with the latest period's values,
+    plus a synthetic '报告期' entry so downstream keyword matching can find it.
+    """
+    if df is None or df.empty or '指标' not in df.columns:
+        return None
+    date_cols = [c for c in df.columns if re.match(r'^\d{8}$', str(c))]
+    if not date_cols:
+        return None
+    latest_col = date_cols[0]  # AkShare sorts newest-first
+    row = df.set_index('指标')[latest_col]
+    # stock_financial_abstract contains duplicate indicator names across sections;
+    # keep the first occurrence so .get() returns a scalar, not a sub-Series.
+    row = row[~row.index.duplicated(keep='first')]
+    report_str = f"{latest_col[:4]}-{latest_col[4:6]}-{latest_col[6:8]}"
+    return pd.concat([row, pd.Series({'报告期': report_str})])
+
+
 def _extract_latest_row(df: pd.DataFrame, stock_code: str) -> Optional[pd.Series]:
     """
     Select the most relevant row for the given stock.
@@ -310,17 +331,29 @@ class AkshareFundamentalAdapter:
         ])
         result["errors"].extend(fin_errors)
         if fin_df is not None:
-            row = _extract_latest_row(fin_df, stock_code)
+            # stock_financial_abstract returns a transposed layout (rows=indicators, cols=dates);
+            # detect and pivot it before falling back to the standard row-per-period extractor.
+            if '指标' in fin_df.columns and any(re.match(r'^\d{8}$', str(c)) for c in fin_df.columns):
+                row = _pivot_transposed_financial(fin_df)
+            else:
+                row = _extract_latest_row(fin_df, stock_code)
             if row is not None:
-                revenue_yoy = _safe_float(_pick_by_keywords(row, ["营业收入同比", "营收同比", "收入同比", "同比增长"]))
-                profit_yoy = _safe_float(_pick_by_keywords(row, ["净利润同比", "净利同比", "归母净利润同比"]))
+                revenue_yoy = _safe_float(_pick_by_keywords(row, [
+                    "营业收入同比", "营收同比", "收入同比", "同比增长",
+                    "营业总收入增长率", "营收增长率",
+                ]))
+                profit_yoy = _safe_float(_pick_by_keywords(row, [
+                    "净利润同比", "净利同比", "归母净利润同比",
+                    "归属母公司净利润增长率", "净利润增长率",
+                ]))
                 roe = _safe_float(_pick_by_keywords(row, ["净资产收益率", "ROE", "净资产收益"]))
                 gross_margin = _safe_float(_pick_by_keywords(row, ["毛利率"]))
                 report_date = _normalize_report_date(_pick_by_keywords(row, _DIVIDEND_KEYWORD_MAP["report_date"]))
                 revenue = _safe_float(_pick_by_keywords(row, ["营业总收入", "营业收入", "营收"]))
                 net_profit_parent = _safe_float(_pick_by_keywords(row, ["归母净利润", "母公司股东净利润", "净利润"]))
                 operating_cash_flow = _safe_float(
-                    _pick_by_keywords(row, ["经营活动产生的现金流量净额", "经营现金流", "经营活动现金流"])
+                    _pick_by_keywords(row, ["经营活动产生的现金流量净额", "经营现金流", "经营活动现金流",
+                                           "经营现金流量净额"])
                 )
                 result["growth"] = {
                     "revenue_yoy": revenue_yoy,

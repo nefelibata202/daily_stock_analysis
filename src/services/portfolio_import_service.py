@@ -73,6 +73,19 @@ DEFAULT_PARSER_SPECS: Tuple[CsvParserSpec, ...] = (
             "trade_uid": ("流水号", "成交编号", "成交序号"),
         },
     ),
+    CsvParserSpec(
+        broker="eastmoney",
+        aliases=("dongfangcaifu", "emt"),
+        display_name="东方财富",
+        column_hints={
+            "trade_date": ("成交日期", "发生日期", "日期"),
+            "symbol": ("证券代码", "股票代码", "代码"),
+            "side": ("操作", "买卖方向", "业务名称", "买卖标志"),
+            "quantity": ("成交数量", "成交股数", "数量"),
+            "price": ("成交均价", "成交价格", "成交价", "均价"),
+            "trade_uid": ("合同编号", "成交编号", "委托编号", "流水号"),
+        },
+    ),
 )
 
 

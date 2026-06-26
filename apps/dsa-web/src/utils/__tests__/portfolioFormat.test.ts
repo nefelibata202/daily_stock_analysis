@@ -14,6 +14,7 @@ import type { PortfolioPositionItem } from '../../types/portfolio';
 
 const pricedPosition: PortfolioPositionItem = {
   symbol: 'HK00700',
+  name: '腾讯控股',
   market: 'hk',
   currency: 'HKD',
   quantity: 100,
