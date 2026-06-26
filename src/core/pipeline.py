@@ -19,7 +19,7 @@ from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
-from typing import List, Dict, Any, Optional, Tuple, Callable
+from typing import List, Dict, Any, Optional, Set, Tuple, Callable
 
 import pandas as pd
 
@@ -359,6 +359,7 @@ class StockAnalysisPipeline:
         report_type: ReportType,
         query_id: str,
         current_time: Optional[datetime] = None,
+        position_type: str = "watchlist",
     ) -> Optional[AnalysisResult]:
         """
         分析单只股票（增强版：含量比、换手率、筹码分析、多维度情报）
@@ -639,6 +640,7 @@ class StockAnalysisPipeline:
                 portfolio_context=portfolio_context,
             )
             enhanced_context["market_phase_context"] = market_phase_context_dict
+            enhanced_context["position_type"] = position_type
             self._attach_daily_market_context(
                 enhanced_context,
                 daily_market_context,
@@ -2671,6 +2673,7 @@ class StockAnalysisPipeline:
         report_type: ReportType = ReportType.SIMPLE,
         analysis_query_id: Optional[str] = None,
         current_time: Optional[datetime] = None,
+        held_codes: Optional[Set[str]] = None,
     ) -> Optional[AnalysisResult]:
         """
         处理单只股票的完整流程
@@ -2727,17 +2730,23 @@ class StockAnalysisPipeline:
                 logger.info(f"[{code}] 跳过 AI 分析（dry-run 模式）")
                 return None
             
-            analyze_kwargs = {"query_id": effective_query_id}
+            position_type = (
+                "held" if held_codes is not None and normalize_stock_code(code) in held_codes
+                else "watchlist"
+            )
+            analyze_kwargs = {"query_id": effective_query_id, "position_type": position_type}
             if current_time is not None:
                 analyze_kwargs["current_time"] = current_time
             result = self.analyze_stock(code, report_type, **analyze_kwargs)
-            
+
             if result and result.success:
                 logger.info(
                     f"[{code}] 分析完成: {result.operation_advice}, "
                     f"评分 {result.sentiment_score}"
                 )
-                
+                result.position_type = position_type
+                logger.debug(f"[{code}] position_type={result.position_type}")
+
                 # 单股推送模式（#55）：每分析完一只股票立即推送
                 if single_stock_notify:
                     self._send_single_stock_notification(
@@ -2836,8 +2845,21 @@ class StockAnalysisPipeline:
                 report_type_str,
             )
         
+        # 查询当前持仓，用于给每只股票打 position_type 标记
+        held_codes: Set[str] = set()
+        if not dry_run:
+            try:
+                from src.services.portfolio_service import PortfolioService
+                held_codes = PortfolioService().get_held_codes()
+                if held_codes:
+                    logger.info(f"持仓股票（共 {len(held_codes)} 只）: {', '.join(sorted(held_codes))}")
+                else:
+                    logger.info("未查询到持仓股票，所有股票标记为 watchlist")
+            except Exception as _e:
+                logger.warning(f"获取持仓数据失败，所有股票标记为 watchlist: {_e}")
+
         results: List[AnalysisResult] = []
-        
+
         # 使用线程池并发处理
         # 注意：max_workers 设置较低（默认3）以避免触发反爬
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
@@ -2851,6 +2873,7 @@ class StockAnalysisPipeline:
                     report_type=report_type,  # Issue #119: 传递报告类型
                     analysis_query_id=uuid.uuid4().hex,
                     current_time=resume_reference_time,
+                    held_codes=held_codes,
                 ): code
                 for code in stock_codes
             }

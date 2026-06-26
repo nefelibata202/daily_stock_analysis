@@ -1628,6 +1628,9 @@ class AnalysisResult:
     # ========== 历史对比（Report Engine P0）==========
     query_id: Optional[str] = None  # 本次分析 query_id，用于历史对比时排除本次记录
 
+    # ========== 持仓标记 ==========
+    position_type: str = "watchlist"  # "held"（持仓股）| "watchlist"（观察股）
+
     # ========== 基本面上下文（仅运行时，用于通知拼装；不持久化到 to_dict）==========
     fundamental_context: Optional[Dict[str, Any]] = None
 
@@ -2194,7 +2197,51 @@ class GeminiAnalyzer:
             ),
         )
 
-    def _get_analysis_system_prompt(self, report_language: str, stock_code: str = "") -> str:
+    _POSITION_TYPE_SECTION_ZH = {
+        "held": """
+## 持仓类型：持仓股（你已持有该股票）
+
+当前决策视角是"如何管理现有仓位"，请严格遵守：
+- `operation_advice` 只能从以下选项中选一个：`强烈买入`（大幅加仓）/ `买入`（适度补仓）/ `观望`（持有不动，等待）/ `减仓`（降低仓位）/ `卖出`（清仓止损）
+- `decision_type`: 强烈买入/买入 → `buy`；观望 → `hold`；减仓/卖出 → `sell`
+- 低分段（0-39分）应评估减仓或卖出，给出具体止损理由
+- 禁止输出"避雷"标签（已持仓无法回避，只能管理仓位）
+""",
+        "watchlist": """
+## 持仓类型：观察股（你尚未持有该股票）
+
+当前决策视角是"要不要进场建仓"，请严格遵守：
+- `operation_advice` 只能从以下选项中选一个：`强烈买入`（强烈建议建仓）/ `买入`（可以建仓）/ `观望`（等待更好时机）/ `避雷`（当前不适合介入）
+- `decision_type`: 强烈买入/买入 → `buy`；观望 → `hold`；避雷 → `sell`
+- 低分段（0-39分）输出"避雷"，并说明具体的不建议建仓原因
+- 禁止输出"减仓""卖出"（尚未持仓，无仓可减）
+""",
+    }
+
+    _POSITION_TYPE_SECTION_EN = {
+        "held": """
+## Position Type: Held Stock (you already hold a position)
+
+Decision perspective is "how to manage the existing position". Strictly follow:
+- `operation_advice` must be one of: `Strong Buy` (add aggressively) / `Buy` (add moderately) / `Watch` (hold, wait) / `Reduce` (trim position) / `Sell` (exit / stop loss)
+- `decision_type`: Strong Buy/Buy → `buy`; Watch → `hold`; Reduce/Sell → `sell`
+- Score 0-39: evaluate reducing or exiting, provide specific stop-loss rationale
+- Do NOT output "Avoid" (you already hold — manage the position instead)
+""",
+        "watchlist": """
+## Position Type: Watchlist Stock (no position held)
+
+Decision perspective is "should I enter a position?" Strictly follow:
+- `operation_advice` must be one of: `Strong Buy` / `Buy` / `Watch` / `Avoid`
+- `decision_type`: Strong Buy/Buy → `buy`; Watch → `hold`; Avoid → `sell`
+- Score 0-39: output "Avoid" and explain why entry is not advisable now
+- Do NOT output "Reduce" or "Sell" (no position to reduce)
+""",
+    }
+
+    def _get_analysis_system_prompt(
+        self, report_language: str, stock_code: str = "", position_type: str = "watchlist"
+    ) -> str:
         """Build the analyzer system prompt with output-language guidance."""
         lang = normalize_report_language(report_language)
         market_role = get_market_role(stock_code, lang)
@@ -2219,8 +2266,10 @@ class GeminiAnalyzer:
                 .replace("{default_skill_policy_section}", default_skill_policy_section)
                 .replace("{skills_section}", skills_section)
             )
+        pt = position_type if position_type in ("held", "watchlist") else "watchlist"
         if lang == "en":
-            return base_prompt + """
+            position_section = self._POSITION_TYPE_SECTION_EN.get(pt, "")
+            return base_prompt + position_section + """
 
 ## Output Language (highest priority)
 
@@ -2230,7 +2279,8 @@ class GeminiAnalyzer:
 - Use the common English company name when you are confident; otherwise keep the original listed company name instead of inventing one.
 - This includes `stock_name`, `trend_prediction`, `operation_advice`, `confidence_level`, nested dashboard text, checklist items, and all narrative summaries.
 """
-        return base_prompt + """
+        position_section = self._POSITION_TYPE_SECTION_ZH.get(pt, "")
+        return base_prompt + position_section + """
 
 ## 输出语言（最高优先级）
 
@@ -3032,7 +3082,8 @@ class GeminiAnalyzer:
         code = context.get('code', 'Unknown')
         config = self._get_runtime_config()
         report_language = normalize_report_language(getattr(config, "report_language", "zh"))
-        system_prompt = self._get_analysis_system_prompt(report_language, stock_code=code)
+        position_type = str(context.get("position_type") or "watchlist")
+        system_prompt = self._get_analysis_system_prompt(report_language, stock_code=code, position_type=position_type)
         skill_instructions, default_skill_policy, use_legacy_default_prompt = self._get_skill_prompt_sections()
         
         # 请求前增加延时（防止连续请求触发限流）

@@ -12,6 +12,7 @@ from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 from data_provider.base import canonical_stock_code, normalize_stock_code
 from src.config import get_config
+from src.data.stock_index_loader import get_index_stock_name
 from src.repositories.portfolio_repo import (
     DuplicateTradeDedupHashError,
     DuplicateTradeUidError,
@@ -573,6 +574,20 @@ class PortfolioService:
             "accounts": accounts_payload,
         }
 
+    def get_held_codes(self) -> Set[str]:
+        """Return normalized codes of all stocks with a current open position."""
+        try:
+            snapshot = self.get_portfolio_snapshot()
+        except Exception:
+            return set()
+        held: Set[str] = set()
+        for account in snapshot.get("accounts", []) or []:
+            for pos in account.get("positions", []) or []:
+                symbol = str(pos.get("symbol") or "").strip()
+                if symbol:
+                    held.add(normalize_stock_code(symbol))
+        return held
+
     def refresh_fx_rates(
         self,
         *,
@@ -1028,6 +1043,7 @@ class PortfolioService:
             position_rows.append(
                 {
                     "symbol": symbol,
+                    "name": self._resolve_position_name(symbol),
                     "market": market,
                     "currency": currency,
                     "quantity": round(qty, 8),
@@ -1085,6 +1101,25 @@ class PortfolioService:
             is_stale=True,
             is_available=False,
         )
+
+    @staticmethod
+    def _resolve_position_name(symbol: str) -> str:
+        """Resolve a display name for a position symbol from the local index.
+
+        Falls back to the symbol itself when the local stock-name index has no
+        entry, so the field is always populated without depending on network."""
+        raw = (symbol or "").strip()
+        if not raw:
+            return ""
+        candidates = [raw]
+        upper = raw.upper()
+        if len(upper) >= 8 and upper[:2] in {"SH", "SZ", "BJ"} and upper[2:].isdigit():
+            candidates.append(upper[2:])  # strip exchange prefix, keep 6-digit core
+        for candidate in candidates:
+            name = get_index_stock_name(candidate)
+            if name:
+                return name
+        return raw
 
     @staticmethod
     def _fetch_realtime_position_price(symbol: str) -> Tuple[Optional[float], Optional[str]]:

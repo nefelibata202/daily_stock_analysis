@@ -49,16 +49,21 @@ _OPERATION_ADVICE_CANONICAL_MAP = {
     "强烈卖出": "strong_sell",
     "strong sell": "strong_sell",
     "strong_sell": "strong_sell",
+    "避雷": "avoid",
+    "avoid": "avoid",
+    "回避": "avoid",
+    "规避": "avoid",
 }
 
 _OPERATION_ADVICE_TRANSLATIONS = {
     "strong_buy": {"zh": "强烈买入", "en": "Strong Buy"},
     "buy": {"zh": "买入", "en": "Buy"},
-    "hold": {"zh": "持有", "en": "Hold"},
+    "hold": {"zh": "观望", "en": "Watch"},
     "watch": {"zh": "观望", "en": "Watch"},
     "reduce": {"zh": "减仓", "en": "Reduce"},
     "sell": {"zh": "卖出", "en": "Sell"},
     "strong_sell": {"zh": "强烈卖出", "en": "Strong Sell"},
+    "avoid": {"zh": "避雷", "en": "Avoid"},
 }
 
 _TREND_PREDICTION_CANONICAL_MAP = {
@@ -761,38 +766,35 @@ def infer_decision_type_from_advice(value: Any, default: str = "hold") -> str:
 
 
 def get_signal_level(advice: Any, score: Any, language: Optional[str]) -> tuple[str, str, str]:
-    """Return localized signal text, emoji, and stable color tag."""
+    """Return localized signal text, emoji, and stable color tag (3-class: buy/watch/sell)."""
     normalized_language = normalize_report_language(language)
     canonical = _canonicalize_lookup_value(advice, _OPERATION_ADVICE_CANONICAL_MAP)
+
+    _buy_label = _OPERATION_ADVICE_TRANSLATIONS["buy"][normalized_language]
+    _watch_label = _OPERATION_ADVICE_TRANSLATIONS["watch"][normalized_language]
+    _sell_label = _OPERATION_ADVICE_TRANSLATIONS["sell"][normalized_language]
+
     if canonical == "strong_buy":
-        return (_OPERATION_ADVICE_TRANSLATIONS["strong_buy"][normalized_language], "💚", "strong_buy")
+        return (_buy_label, "💚", "buy")
     if canonical == "buy":
-        return (_OPERATION_ADVICE_TRANSLATIONS["buy"][normalized_language], "🟢", "buy")
-    if canonical == "hold":
-        return (_OPERATION_ADVICE_TRANSLATIONS["hold"][normalized_language], "🟡", "hold")
-    if canonical == "watch":
-        return (_OPERATION_ADVICE_TRANSLATIONS["watch"][normalized_language], "⚪", "watch")
+        return (_buy_label, "🟢", "buy")
+    if canonical in {"hold", "watch"}:
+        return (_watch_label, "🟡", "hold")
     if canonical == "reduce":
-        return (_OPERATION_ADVICE_TRANSLATIONS["reduce"][normalized_language], "🟠", "reduce")
-    if canonical in {"sell", "strong_sell"}:
-        return (_OPERATION_ADVICE_TRANSLATIONS["sell"][normalized_language], "🔴", "sell")
+        return (_sell_label, "🔻", "sell")
+    if canonical in {"sell", "strong_sell", "avoid"}:
+        return (_sell_label, "🔴", "sell")
 
     try:
         numeric_score = int(float(score))
     except (TypeError, ValueError):
         numeric_score = 50
 
-    if numeric_score >= 80:
-        return (_OPERATION_ADVICE_TRANSLATIONS["strong_buy"][normalized_language], "💚", "strong_buy")
     if numeric_score >= 65:
-        return (_OPERATION_ADVICE_TRANSLATIONS["buy"][normalized_language], "🟢", "buy")
-    if numeric_score >= 55:
-        return (_OPERATION_ADVICE_TRANSLATIONS["hold"][normalized_language], "🟡", "hold")
-    if numeric_score >= 45:
-        return (_OPERATION_ADVICE_TRANSLATIONS["watch"][normalized_language], "⚪", "watch")
+        return (_buy_label, "🟢", "buy")
     if numeric_score >= 35:
-        return (_OPERATION_ADVICE_TRANSLATIONS["reduce"][normalized_language], "🟠", "reduce")
-    return (_OPERATION_ADVICE_TRANSLATIONS["sell"][normalized_language], "🔴", "sell")
+        return (_watch_label, "🟡", "hold")
+    return (_sell_label, "🔴", "sell")
 
 
 def get_localized_stock_name(value: Any, code: Any, language: Optional[str]) -> str:
